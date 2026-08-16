@@ -11,6 +11,10 @@
 #   CDX_RPCPORT        port RPC (override; default sesuai network: 19343 dll)
 #   CDX_MINER_ADDRESS  alamat payout mining      (kosong = mining nonaktif)
 #   CDX_GENERATE       "1" untuk mining terus-menerus (regtest/dev)
+#   CDX_EXTERNALADDR   alamat peer yang diregister ke MongoDB registry.
+#                      PENTING untuk node PaaS: daftarkan alamat yang bisa
+#                      diakses node lain (TCP proxy), BUKAN IP internal
+#                      container. Contoh: interchange.proxy.rlwy.net:30167
 #   CDX_EXTRA_ARGS     argumen tambahan untuk cdxd
 #
 # Catatan platform:
@@ -48,6 +52,10 @@ if [[ -n "${CDX_MINER_ADDRESS:-}" ]]; then
 fi
 if [[ "${CDX_GENERATE:-0}" == "1" ]]; then
     ARGS+=("-generate")
+fi
+# Alamat publik untuk peer registry (node PaaS: TCP proxy, bukan IP internal)
+if [[ -n "${CDX_EXTERNALADDR:-}" ]]; then
+    ARGS+=("-externaladdr=${CDX_EXTERNALADDR}")
 fi
 if [[ -n "${CDX_EXTRA_ARGS:-}" ]]; then
     # pecah string menjadi argumen terpisah
