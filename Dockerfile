@@ -2,17 +2,22 @@
 # Dockerfile — CDX Full Node (Codex Coin)
 # Base: Ubuntu 22.04 (jammy)
 #
-# Cara pakai:
+# Cara pakai (Docker biasa):
 #   docker build -t cdx-node .
 #   docker run -d --name cdx-main -p 19333:19333 \
-#     -v cdx-data:/cdx/data \
+#     -v cdx-data:/data \
 #     -e CDX_NETWORK=mainnet \
 #     -e CDX_RPCUSER=cdx -e CDX_RPCPASSWORD=cdx \
 #     cdx-node
 #
-# RPC hanya bind ke 127.0.0.1 di dalam container (default node).
-# Untuk akses RPC dari host: jalankan dengan --network host, atau
-# expose via port-forwarding tambahan (mis. socat).
+# Deploy di Railway:
+#   - Tanpa instruksi VOLUME (Railway tidak mendukung; pakai Railway Volumes
+#     yang di-mount otomatis ke /data).
+#   - Railway menyuntik env PORT -> node bind P2P ke $PORT (0.0.0.0) agar
+#     bisa di-expose / healthcheck Railway.
+#   - Attach Volume Railway ke /data agar blockchain persisten.
+#
+# RPC selalu bind ke 127.0.0.1 di dalam container (default node).
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -62,8 +67,7 @@ RUN useradd --system --create-home --home-dir /cdx cdxuser
 
 COPY --from=builder /opt/cdx/bin/ /usr/local/bin/
 
-# Data dir node
-VOLUME ["/cdx/data"]
+# Data dir node (tanpa VOLUME — Railway memakai Railway Volumes, mount /data)
 WORKDIR /cdx
 
 # Port P2P: mainnet 19333, testnet 19334, regtest 19444
