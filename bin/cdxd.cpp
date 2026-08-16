@@ -686,6 +686,12 @@ int main(int argc, char** argv) {
     ChainParams params = GetParams(opts.network); // salin; port dapat di-override
     if (opts.port != 0) params.defaultPort = opts.port;
     if (opts.rpcPort != 0) params.rpcPort = opts.rpcPort;
+    // Auto-shift RPC: kalau -port di-set tapi -rpcport tidak, geser RPC ke
+    // port+10 (konsisten mainnet 19333->19343). Menghindari konflik saat:
+    //   - 2 node di mesin sama (P2P beda, RPC default sama)
+    //   - Platform inject PORT == default RPC port (Railway/Koyeb)
+    if (opts.port != 0 && opts.rpcPort == 0)
+        params.rpcPort = (uint16_t)(opts.port + 10);
 
     std::printf("CDX Node — network: %s, data: %s\n", opts.network.c_str(), opts.dataDir.c_str());
     std::printf("CDX magic: 0x%08x, port: %u, rpc port: %u\n",
