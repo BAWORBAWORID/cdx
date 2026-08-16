@@ -224,21 +224,9 @@ static std::vector<uint8_t> B64Decode(const std::string& s) {
 // ---------------------------------------------------------------------------
 // DNS SRV lookup (raw UDP query — _mongodb._tcp.<host>)
 // ---------------------------------------------------------------------------
-static bool DnsSrvLookup(const std::string& domain,
-                         std::vector<std::pair<std::string, uint16_t>>& out) {
-    std::string ns = "8.8.8.8";
-    {
-        std::ifstream f("/etc/resolv.conf");
-        std::string line;
-        while (std::getline(f, line)) {
-            if (line.rfind("nameserver", 0) == 0) {
-                std::istringstream iss(line);
-                std::string kw, ip;
-                iss >> kw >> ip;
-                if (!ip.empty()) { ns = ip; break; }
-            }
-        }
-    }
+// query SRV ke satu nameserver; return true jika ada jawaban
+static bool DnsSrvQueryOne(const std::string& ns, const std::string& domain,
+                           std::vector<std::pair<std::string, uint16_t>>& out) {
     struct sockaddr_in sa;
     std::memset(&sa, 0, sizeof(sa));
     sa.sin_family = AF_INET;
@@ -247,7 +235,7 @@ static bool DnsSrvLookup(const std::string& domain,
 
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) return false;
-    struct timeval tv = {5, 0};
+    struct timeval tv = {4, 0};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     std::vector<uint8_t> q;
@@ -314,6 +302,37 @@ static bool DnsSrvLookup(const std::string& domain,
         pos += rdlen;
     }
     return !out.empty();
+}
+
+static bool DnsSrvLookup(const std::string& domain,
+                         std::vector<std::pair<std::string, uint16_t>>& out) {
+    // kumpulkan SEMUA nameserver dari resolv.conf (jangan hanya yang pertama —
+    // di container PaaS nameserver pertama bisa internal/blocked)
+    std::vector<std::string> nss;
+    {
+        std::ifstream f("/etc/resolv.conf");
+        std::string line;
+        while (std::getline(f, line)) {
+            if (line.rfind("nameserver", 0) == 0) {
+                std::istringstream iss(line);
+                std::string kw, ip;
+                iss >> kw >> ip;
+                if (!ip.empty()) nss.push_back(ip);
+            }
+        }
+    }
+    // fallback resolver publik
+    nss.push_back("8.8.8.8");
+    nss.push_back("1.1.1.1");
+
+    for (const auto& ns : nss) {
+        std::vector<std::pair<std::string, uint16_t>> tmp;
+        if (DnsSrvQueryOne(ns, domain, tmp)) {
+            out = std::move(tmp);
+            return true;
+        }
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------------
