@@ -309,6 +309,33 @@ void CNetServer::ReadLoop(std::shared_ptr<CNode> node) {
 }
 
 void CNetServer::ProcessBuffer(std::shared_ptr<CNode> node) {
+    // Platform PaaS (Railway/Koyeb/Heroku) melakukan health check HTTP ke
+    // port yang di-expose. Node CDX bind protokol P2P (binary) di port itu,
+    // sehingga health check gagal -> instance stuck "starting".
+    // Solusi: deteksi request HTTP di awal buffer -> balas 200 OK (health OK),
+    // tanpa mengganggu protokol P2P CDX (magic 0xCDA1CD01, bukan HTTP).
+    {
+        std::lock_guard<std::mutex> lk(peersMutex);
+        static const char* httpMethods[] = {"GET ", "POST ", "HEAD ", "PUT ",
+                                            "OPTIONS ", "DELETE ", "PATCH "};
+        bool isHttp = false;
+        for (const char* m : httpMethods) {
+            size_t len = std::strlen(m);
+            if (node->recvBuffer.size() >= len &&
+                std::memcmp(node->recvBuffer.data(), m, len) == 0) {
+                isHttp = true;
+                break;
+            }
+        }
+        if (isHttp) {
+            const char* resp =
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n"
+                "Content-Length: 2\r\nConnection: close\r\n\r\nok";
+            WriteTo(node->fd, std::vector<uint8_t>(resp, resp + std::strlen(resp)));
+            node->MarkDisconnected();
+            return;
+        }
+    }
     for (;;) {
         CNetMessage msg;
         size_t consumed = 0;
