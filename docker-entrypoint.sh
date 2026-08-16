@@ -8,6 +8,7 @@
 #   CDX_RPCUSER        user RPC                  (default: cdx)
 #   CDX_RPCPASSWORD    password RPC              (default: cdx)
 #   CDX_PORT           port P2P (override; Railway inject env PORT otomatis)
+#   CDX_RPCPORT        port RPC (override; default sesuai network: 19343 dll)
 #   CDX_MINER_ADDRESS  alamat payout mining      (kosong = mining nonaktif)
 #   CDX_GENERATE       "1" untuk mining terus-menerus (regtest/dev)
 #   CDX_EXTRA_ARGS     argumen tambahan untuk cdxd
@@ -30,6 +31,11 @@ ARGS=(
 PORT="${CDX_PORT:-${PORT:-}}"
 if [[ -n "${PORT}" ]]; then
     ARGS+=("-port=${PORT}")
+fi
+
+# Override port RPC (hindari konflik bila PORT == default RPC port)
+if [[ -n "${CDX_RPCPORT:-}" ]]; then
+    ARGS+=("-rpcport=${CDX_RPCPORT}")
 fi
 
 # Mining: aktif bila alamat diberikan (atau generate mode)
