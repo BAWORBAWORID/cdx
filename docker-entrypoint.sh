@@ -12,6 +12,12 @@
 #   CDX_MINER_ADDRESS  alamat payout mining      (kosong = mining nonaktif)
 #   CDX_GENERATE       "1" untuk mining terus-menerus (regtest/dev)
 #   CDX_EXTRA_ARGS     argumen tambahan untuk cdxd
+#
+# Catatan platform:
+#   - Railway : inject env PORT otomatis -> dipakai sebagai port P2P.
+#   - Koyeb   : TIDAK inject PORT; default web port = 8000 dan health check
+#     mengecek port itu. Maka default di sini = 8000 agar health check Koyeb
+#     lulus (node bind P2P ke 0.0.0.0:8000). Set CDX_PORT bila ingin beda.
 # =============================================================================
 set -euo pipefail
 
@@ -27,11 +33,9 @@ ARGS=(
     "-rpcpassword=${RPCPASSWORD}"
 )
 
-# Railway: inject env PORT (port TCP yang di-expose platform) ke P2P node
-PORT="${CDX_PORT:-${PORT:-}}"
-if [[ -n "${PORT}" ]]; then
-    ARGS+=("-port=${PORT}")
-fi
+# Port P2P: Railway inject PORT; Koyeb default 8000; fallback 8000
+PORT="${CDX_PORT:-${PORT:-8000}}"
+ARGS+=("-port=${PORT}")
 
 # Override port RPC (hindari konflik bila PORT == default RPC port)
 if [[ -n "${CDX_RPCPORT:-}" ]]; then
@@ -55,6 +59,6 @@ fi
 mkdir -p "${DATADIR}"
 chown -R cdxuser:cdxuser /cdx "${DATADIR}"
 
-echo "[cdx] starting ${NETWORK} node (data: ${DATADIR})"
-# drop privilege ke cdxuser lalu jalankan node
-exec su -s /bin/bash cdxuser -c "exec cdxd $(printf '%q ' "${ARGS[@]}")"
+echo "[cdx] starting ${NETWORK} node (data: ${DATADIR}) port ${PORT}"
+# drop privilege ke cdxuser lalu jalankan node (stdbuf: log terlihat realtime)
+exec su -s /bin/bash cdxuser -c "exec stdbuf -oL -eL cdxd $(printf '%q ' "${ARGS[@]}")"
