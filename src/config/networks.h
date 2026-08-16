@@ -32,6 +32,7 @@ struct ChainParams {
     int64_t maxBlockSize;           // bytes
     int64_t defaultFeeRate;         // base units / byte (fallback estimatesmartfee)
     std::vector<std::string> seedNodes;
+    std::string peerRegistryUri;    // MongoDB URI peer registry (opsional, non-konsensus)
 };
 
 // Network magic values — identitas CDX sendiri.

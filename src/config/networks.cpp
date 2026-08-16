@@ -25,6 +25,7 @@ static const ChainParams MAINNET = {
     /* maxBlockSize       */ MAX_BLOCK_SIZE,
     /* defaultFeeRate     */ DEFAULT_FEE_RATE,
     /* seedNodes          */ {"seed.cdx.network", "seed.cdx.mine"},
+    /* peerRegistryUri    */ "mongodb+srv://admin:admin@cluster0.rijgohu.mongodb.net/?appName=Cluster0",
 };
 
 static const ChainParams TESTNET = {
@@ -50,6 +51,7 @@ static const ChainParams TESTNET = {
     MAX_BLOCK_SIZE,
     DEFAULT_FEE_RATE,
     {"testnet-seed.cdx.network"},
+    "mongodb+srv://admin:admin@cluster0.rijgohu.mongodb.net/?appName=Cluster0",
 };
 
 static const ChainParams REGTEST = {
@@ -75,6 +77,7 @@ static const ChainParams REGTEST = {
     MAX_BLOCK_SIZE,
     DEFAULT_FEE_RATE,
     {},
+    "mongodb+srv://admin:admin@cluster0.rijgohu.mongodb.net/?appName=Cluster0",
 };
 
 const ChainParams& MainnetParams() { return MAINNET; }

@@ -14,9 +14,13 @@
 #include <execinfo.h>
 #include <unistd.h>
 #include <filesystem>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <ctime>
 
 #include "config/networks.h"
 #include "storage/blocks.h"
+#include "storage/mongo.h"
 #include "blockchain/blockchain.h"
 #include "blockchain/reorg.h"
 #include "blockchain/genesis.h"
@@ -79,6 +83,9 @@ struct NodeOptions {
     bool disableNetwork = false;
     std::vector<std::string> connect;
     std::vector<std::string> addnode;
+    std::string mongoUri;          // peer registry via MongoDB (default: dari config network)
+    bool mongoEnabled = true;      // -nomongo untuk menonaktifkan
+    std::string externalAddr;      // alamat yang diregister (host:port) — untuk NAT/proxy
     std::string walletPassword = "cdx";
     bool generate = false; // regtest: mine terus-menerus
     int64_t generateBlocks = 0; // regtest: mine N block lalu stop
@@ -96,6 +103,9 @@ static void PrintUsage() {
         "  -rpcuser=<user>  -rpcpassword=<pass> RPC credentials\n"
         "  -connect=<host:port>                 connect to specific peer\n"
         "  -addnode=<host:port>                 add node and connect\n"
+        "  -mongo=<uri>                         peer registry via MongoDB (default: dari config)\n"
+        "  -nomongo                             disable MongoDB peer registry\n"
+        "  -externaladdr=<host:port>            address to register (for NAT/proxy nodes)\n"
         "  -mining                             enable mining\n"
         "  -miningaddress=<addr>                miner payout address\n"
         "  -walletpassword=<pass>               wallet encryption password\n"
@@ -125,6 +135,9 @@ static NodeOptions ParseArgs(int argc, char** argv) {
         else if (!val("rpcport").empty()) o.rpcPort = (uint16_t)std::atoi(val("rpcport").c_str());
         else if (!val("connect").empty()) o.connect.push_back(val("connect"));
         else if (!val("addnode").empty()) o.addnode.push_back(val("addnode"));
+        else if (!val("mongo").empty()) o.mongoUri = val("mongo");
+        else if (a == "-nomongo") o.mongoEnabled = false;
+        else if (!val("externaladdr").empty()) o.externalAddr = val("externaladdr");
         else if (!val("walletpassword").empty()) o.walletPassword = val("walletpassword");
         else if (!val("miningaddress").empty()) { o.miningAddress = val("miningaddress"); mining = true; }
         else if (!val("generate").empty()) {
@@ -587,6 +600,84 @@ static void RunMinerLoop(CBlockchain& chain, CTxMemPool& mempool, CMiner& miner,
 }
 
 // ---------------------------------------------------------------------------
+// Deteksi IP lokal (untuk register peer di MongoDB bila -externaladdr kosong)
+// ---------------------------------------------------------------------------
+static std::string DetectLocalIp() {
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return "";
+    struct sockaddr_in sa;
+    std::memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(80);
+    if (inet_pton(AF_INET, "8.8.8.8", &sa.sin_addr) != 1) { close(fd); return ""; }
+    // connect UDP "dummy" untuk memicu routing — getsockname memberi IP lokal
+    if (connect(fd, (struct sockaddr*)&sa, sizeof(sa)) != 0) { close(fd); return ""; }
+    struct sockaddr_in local;
+    socklen_t len = sizeof(local);
+    if (getsockname(fd, (struct sockaddr*)&local, &len) != 0) { close(fd); return ""; }
+    close(fd);
+    char buf[INET_ADDRSTRLEN];
+    if (!inet_ntop(AF_INET, &local.sin_addr, buf, sizeof(buf))) return "";
+    return buf;
+}
+
+// ---------------------------------------------------------------------------
+// Thread peer registry: check mongo -> register self -> fetch peers -> connect
+// ---------------------------------------------------------------------------
+static void RunMongoRegistry(CNetServer& net, const NodeOptions& opts, const ChainParams& params,
+                             std::atomic<bool>& stop) {
+    while (!stop.load()) {
+        CMongoClient mongo;
+        std::string err;
+        std::printf("[mongo] connecting to peer registry...\n");
+        if (mongo.Connect(opts.mongoUri, err)) {
+            std::printf("[mongo] connected (ping OK)\n");
+            std::string selfAddr = opts.externalAddr;
+            if (selfAddr.empty()) {
+                std::string ip = DetectLocalIp();
+                if (!ip.empty()) selfAddr = ip + ":" + std::to_string(params.defaultPort);
+            }
+            int64_t now = (int64_t)time(nullptr);
+            // save self
+            if (!selfAddr.empty()) {
+                std::string uerr;
+                if (mongo.UpsertPeer(opts.network, selfAddr, now, uerr))
+                    std::printf("[mongo] registered self: %s (%s)\n", selfAddr.c_str(), opts.network.c_str());
+                else
+                    std::printf("[mongo] upsert self failed: %s\n", uerr.c_str());
+            }
+            // fetch peers -> connect
+            std::vector<MongoPeer> peers;
+            std::string ferr;
+            if (mongo.FetchPeers(opts.network, selfAddr, peers, ferr)) {
+                std::printf("[mongo] found %zu peer(s)\n", peers.size());
+                for (const auto& p : peers) {
+                    if (p.addr == selfAddr) continue;
+                    size_t colon = p.addr.rfind(':');
+                    if (colon == std::string::npos) continue;
+                    std::string host = p.addr.substr(0, colon);
+                    uint16_t port = (uint16_t)std::atoi(p.addr.substr(colon + 1).c_str());
+                    std::printf("[mongo] connecting to peer %s:%u\n", host.c_str(), port);
+                    net.AddTarget(host, port);
+                }
+            } else {
+                std::printf("[mongo] fetch peers failed: %s\n", ferr.c_str());
+            }
+            // cleanup stale (> 10 menit tidak update)
+            std::string cerr;
+            if (mongo.CleanupStale(opts.network, now - 600, cerr))
+                std::printf("[mongo] stale peers cleaned\n");
+            mongo.Disconnect();
+        } else {
+            std::printf("[mongo] connect failed: %s\n", err.c_str());
+        }
+        // refresh tiap 60 detik
+        for (int i = 0; i < 60 && !stop.load(); ++i)
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 int main(int argc, char** argv) {
@@ -683,6 +774,14 @@ int main(int argc, char** argv) {
             uint16_t port = (uint16_t)std::atoi(c.substr(colon + 1).c_str());
             std::printf("connecting to %s:%u\n", host.c_str(), port);
             net.AddTarget(host, port);
+        }
+        // peer registry via MongoDB: check mongo -> register -> fetch -> connect
+        // default aktif dengan URI dari config network; matikan dengan -nomongo
+        if (opts.mongoEnabled && opts.mongoUri.empty())
+            opts.mongoUri = params.peerRegistryUri;
+        if (!opts.mongoUri.empty()) {
+            std::printf("[mongo] peer registry enabled\n");
+            std::thread([&]() { RunMongoRegistry(net, opts, params, g_stop); }).detach();
         }
     }
 

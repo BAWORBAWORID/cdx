@@ -52,6 +52,7 @@ set(CDX_SOURCES
   src/storage/blocks.cpp
   src/storage/chainstate.cpp
   src/storage/peers.cpp
+  src/storage/mongo.cpp
   src/p2p/protocol.cpp
   src/p2p/peer.cpp
   src/p2p/server.cpp
@@ -63,7 +64,7 @@ set(CDX_SOURCES
 
 add_library(cdxcore STATIC ${CDX_SOURCES})
 target_include_directories(cdxcore PUBLIC src)
-target_link_libraries(cdxcore PUBLIC OpenSSL::Crypto Threads::Threads)
+target_link_libraries(cdxcore PUBLIC OpenSSL::Crypto OpenSSL::SSL Threads::Threads)
 
 add_executable(cdxd bin/cdxd.cpp)
 target_link_libraries(cdxd PRIVATE cdxcore)
