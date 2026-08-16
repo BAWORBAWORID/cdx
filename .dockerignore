@@ -1,0 +1,18 @@
+# Build artifacts
+build/
+
+# Data & progress files
+data/
+*.progress
+
+# Git & editor
+.git/
+.gitignore
+*.swp
+*~
+
+# Reference source (bukan bagian build Docker)
+reference/
+
+# Docker compose (opsional, bukan untuk context build)
+docker-compose.yml
