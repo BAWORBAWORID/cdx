@@ -84,6 +84,7 @@ struct NodeOptions {
     int64_t generateBlocks = 0; // regtest: mine N block lalu stop
     std::string miningAddress;
     bool rescan = false;
+    bool createWallet = false; // buat wallet baru hanya jika diminta
 };
 
 static void PrintUsage() {
@@ -100,6 +101,7 @@ static void PrintUsage() {
         "  -walletpassword=<pass>               wallet encryption password\n"
         "  -generate                            mine continuously (regtest)\n"
         "  -generate=<n>                        mine n blocks then stop\n"
+        "  -createwallet                        create new wallet if none exists\n"
         "  -rescan                              rescan wallet after load\n"
         "  -dnsseed                            enable DNS seed resolution (default on)\n");
 }
@@ -132,6 +134,7 @@ static NodeOptions ParseArgs(int argc, char** argv) {
         }
         else if (a == "-mining") { mining = true; }
         else if (a == "-generate") { o.generate = true; mining = true; }
+        else if (a == "-createwallet") { o.createWallet = true; }
         else if (a == "-rescan") { o.rescan = true; }
         else if (a == "-dnsseed=0") { /* accepted, seed resolution optional */ }
         else if (a == "-h") { PrintUsage(); exit(0); }
@@ -611,11 +614,12 @@ int main(int argc, char** argv) {
     // mempool
     CTxMemPool mempool;
 
-    // wallet
+    // wallet — TIDAK auto-create. Node berjalan tanpa wallet bila tidak ada
+    // wallet.dat; buat hanya dengan flag -createwallet (atau cdx-cli wallet create).
     std::filesystem::create_directories(opts.dataDir + "/wallets");
     CWallet wallet;
     wallet.versionByte = params.addressVersion;
-    bool walletExists = false;
+    bool walletLoaded = false;
     {
         // load wallet.dat jika ada
         std::string walletPath = opts.dataDir + "/wallets/wallet.dat";
@@ -629,31 +633,34 @@ int main(int argc, char** argv) {
             in.close();
             try {
                 wallet.keystore = CKeystore::Deserialize(data);
-                walletExists = true;
+                wallet.Unlock(opts.walletPassword);
+                walletLoaded = true;
+                std::printf("wallet loaded (%zu keys)\n", wallet.KeyCount());
             } catch (const std::exception& e) {
                 std::fprintf(stderr, "wallet load failed: %s\n", e.what());
             }
         }
-        if (!walletExists) {
-            // wallet baru
+        if (!walletLoaded && opts.createWallet) {
+            // buat wallet baru hanya jika diminta eksplisit
             wallet.Unlock(opts.walletPassword);
             CKeyPair first = wallet.GenerateNewAddress();
+            walletLoaded = true;
             std::printf("new wallet created, first address: %s\n", first.address.c_str());
-        } else {
-            wallet.Unlock(opts.walletPassword);
-            std::printf("wallet loaded (%zu keys)\n", wallet.KeyCount());
+            // simpan wallet baru
+            auto ser = wallet.keystore.Serialize();
+            std::ofstream out(walletPath, std::ios::binary | std::ios::trunc);
+            if (out.good()) {
+                out.write((const char*)ser.data(), (std::streamsize)ser.size());
+                out.close();
+            }
         }
-        if (opts.rescan) {
+        if (!walletLoaded) {
+            std::printf("no wallet found (run with -createwallet to create one)\n");
+        }
+        if (opts.rescan && walletLoaded) {
             std::string re;
             int64_t n = WalletRescan(wallet, blockchain, re);
             std::printf("wallet rescan: %lld transactions found\n", (long long)n);
-        }
-        // simpan wallet
-        auto ser = wallet.keystore.Serialize();
-        std::ofstream out(walletPath, std::ios::binary | std::ios::trunc);
-        if (out.good()) {
-            out.write((const char*)ser.data(), (std::streamsize)ser.size());
-            out.close();
         }
     }
 
@@ -783,8 +790,8 @@ int main(int argc, char** argv) {
     net.Stop();
     rpc.Stop();
 
-    // simpan wallet terakhir
-    {
+    // simpan wallet terakhir (hanya jika wallet aktif)
+    if (walletLoaded) {
         auto ser = wallet.keystore.Serialize();
         std::ofstream out(opts.dataDir + "/wallets/wallet.dat", std::ios::binary | std::ios::trunc);
         if (out.good()) {
