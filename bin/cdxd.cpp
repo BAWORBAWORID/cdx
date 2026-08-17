@@ -482,6 +482,10 @@ static void StartMiningThread(CBlockchain& blockchain, CTxMemPool& mempool, CMin
                               std::atomic<bool>& stop) {
     std::lock_guard<std::mutex> lk(g_minerMutex);
     if (g_minerThreadActive.load()) return;
+    // thread mining sebelumnya mungkin sudah selesai (mis. -generate=<n> tercapai)
+    // dan menandai active=false tanpa di-join — join dulu sebelum assign ulang
+    // (kalau tidak, assignment std::thread ke objek joinable -> std::terminate).
+    if (g_minerThread.joinable()) g_minerThread.join();
     // set flag sinkron (jangan andalkan thread RunLoop yang asinkron)
     miner.stopRequested = false;
     miner.running = true;

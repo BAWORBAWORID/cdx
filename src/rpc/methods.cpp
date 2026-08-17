@@ -3,11 +3,13 @@
 #include "crypto/hash.h"
 #include "crypto/encoding.h"
 #include "transaction/serializer.h"
+#include "script/interpreter.h"
 #include "consensus/difficulty.h"
 #include "consensus/policy.h"
 #include "consensus/rewards.h"
 #include "mining/pow.h"
 #include <ctime>
+#include <cstring>
 #include <sstream>
 
 namespace cdx {
@@ -102,7 +104,96 @@ void RegisterRpcMethods(CRpcServer& server,
                 return JsonString(toHex(SerializeTransaction(it->second.tx)));
             }
         }
+        // cari di blockchain (scan per block; chain kecil — cukup)
+        std::lock_guard<std::mutex> lk(blockchain->GetMutex());
+        for (int64_t h = 0; h <= blockchain->GetHeight(); ++h) {
+            CBlock blk;
+            if (!blockchain->GetBlockByHeight(h, blk)) continue;
+            for (const auto& tx : blk.vtx) {
+                if (GetTxID(tx) == txid)
+                    return JsonString(toHex(SerializeTransaction(tx)));
+            }
+        }
         return std::string("null");
+    });
+
+    // listunspent <address> — scan UTXO set untuk alamat tertentu
+    server.Register("listunspent", [=](const std::vector<std::string>& p) {
+        std::lock_guard<std::mutex> lk(blockchain->GetMutex());
+        if (p.empty()) return std::string("[]");
+        uint8_t ver, hash160[20];
+        if (!DecodeAddress(p[0], ver, hash160)) return std::string("[]");
+        int64_t height = blockchain->GetHeight();
+        const auto& view = blockchain->GetView();
+        std::ostringstream o;
+        o << "[";
+        bool first = true;
+        for (const auto& kv : view.utxo) {
+            uint8_t h[20];
+            if (!ExtractP2PKHHash(kv.second.scriptPubKey, h)) continue;
+            if (std::memcmp(h, hash160, 20) != 0) continue;
+            if (!first) o << ",";
+            first = false;
+            o << "{\"txid\":" << JsonString(kv.first.hash.getHex())
+              << ",\"vout\":" << kv.first.n
+              << ",\"value\":" << kv.second.value
+              << ",\"height\":" << kv.second.height
+              << ",\"coinbase\":" << (kv.second.isCoinbase ? "true" : "false")
+              << ",\"spendable\":" << (kv.second.IsSpendable(height) ? "true" : "false") << "}";
+        }
+        o << "]";
+        return o.str();
+    });
+
+    // getaddresstxs <address> — scan chain, list tx yang menyentuh alamat
+    server.Register("getaddresstxs", [=](const std::vector<std::string>& p) {
+        std::lock_guard<std::mutex> lk(blockchain->GetMutex());
+        if (p.empty()) return std::string("[]");
+        uint8_t ver, hash160[20];
+        if (!DecodeAddress(p[0], ver, hash160)) return std::string("[]");
+        auto target = BuildP2PKHScript(hash160);
+        auto touches = [&](const CTransaction& tx) -> bool {
+            for (const auto& out : tx.vout)
+                if (out.scriptPubKey == target) return true;
+            for (const auto& in : tx.vin) {
+                std::vector<uint8_t> pub;
+                GetScriptSigPubKey(in.scriptSig, pub);
+                if (pub.empty()) continue;
+                uint8_t hh[20];
+                HASH160(pub.data(), pub.size(), hh);
+                if (std::memcmp(hh, hash160, 20) == 0) return true;
+            }
+            return false;
+        };
+        std::ostringstream o;
+        o << "[";
+        bool first = true;
+        for (int64_t h = 0; h <= blockchain->GetHeight(); ++h) {
+            CBlock blk;
+            if (!blockchain->GetBlockByHeight(h, blk)) continue;
+            for (const auto& tx : blk.vtx) {
+                if (!touches(tx)) continue;
+                if (!first) o << ",";
+                first = false;
+                o << "{\"txid\":" << JsonString(GetTxID(tx).getHex())
+                  << ",\"height\":" << h
+                  << ",\"blockhash\":" << JsonString(blk.GetHash().getHex())
+                  << ",\"iscoinbase\":" << (tx.IsCoinBase() ? "true" : "false") << "}";
+            }
+        }
+        // mempool (belum dikonfirmasi)
+        for (const auto& kv : mempool->mapTx) {
+            const auto& tx = kv.second.tx;
+            if (!touches(tx)) continue;
+            if (!first) o << ",";
+            first = false;
+            o << "{\"txid\":" << JsonString(kv.first.getHex())
+              << ",\"height\":-1"
+              << ",\"blockhash\":\"\""
+              << ",\"iscoinbase\":false}";
+        }
+        o << "]";
+        return o.str();
     });
 
     server.Register("sendrawtransaction", [=](const std::vector<std::string>& p) {
@@ -242,6 +333,16 @@ void RegisterRpcMethods(CRpcServer& server,
           << ",\"nonce\":" << hdr.nonce
           << ",\"bits\":" << hdr.bits
           << ",\"previousblockhash\":" << JsonString(hdr.prevBlockHash.getHex()) << "}";
+        return o.str();
+    });
+
+    server.Register("gettxoutsetinfo", [=](const std::vector<std::string>&) {
+        std::lock_guard<std::mutex> lk(blockchain->GetMutex());
+        const auto& view = blockchain->GetView();
+        std::ostringstream o;
+        o << "{\"height\":" << blockchain->GetHeight()
+          << ",\"transactions\":" << view.Size()
+          << ",\"total_amount\":" << view.TotalValue() << "}";
         return o.str();
     });
 
