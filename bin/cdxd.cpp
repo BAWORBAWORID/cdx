@@ -317,6 +317,19 @@ void CNodeHandler::HandleBlock(CNode& node, const std::vector<uint8_t>& payload)
         mempool.RemoveSpent(chain.GetView(), chain.GetHeight(), removed);
         // relay block
         net.BroadcastMessage("inv", SerializeInv({{InvType::BLOCK, hash}}), node.fd);
+        // resume sync: kalau kita masih di bawah height yang dilaporkan peer
+        // saat handshake, minta headers lanjutan supaya download history terus
+        // berjalan (tidak hanya menunggu block broadcast baru).
+        if (chain.GetHeight() < node.theirVersion.startHeight) {
+            std::vector<uint256> locator2;
+            for (int64_t hh = chain.GetHeight(); hh >= 0 && locator2.size() < 32;
+                 hh -= (locator2.size() > 10 ? 2 : 1)) {
+                uint256 hh2;
+                if (chain.GetBlockHashByHeight(hh, hh2)) locator2.push_back(hh2);
+            }
+            auto p2 = BuildGetHeadersPayload(locator2, uint256());
+            net.SendTo(node.fd, "getheaders", p2);
+        }
         // update wallet history
         if (wallet) {
             const CBlockIndex* idx = chain.GetIndex(hash);
